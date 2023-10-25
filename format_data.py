@@ -169,8 +169,8 @@ def format_data(data, is_test=False):
 
         # Ensure LOCATION column is of type int
         data['LOCATION'] = data['LOCATION'].astype(int)
-
-        # Add southern_hemisphere
+        
+    if "LOCATION" in data.columns:        
         data["SOUTHERN_HEMISPHERE"] = (data["LOCATION"] <= 2).astype(int)
 
     if "LOCATION" in data.columns:
@@ -222,9 +222,40 @@ def format_data(data, is_test=False):
 
     if "MONTH" in data.columns:
         data['SEASON'] = data['MONTH'].apply(lambda x: 'Winter' if x in [12, 1, 2] else ('Spring' if x in [3, 4, 5] else ('Summer' if x in [6, 7, 8] else 'Fall')))
-        one_hot = pd.get_dummies(data['SEASON'], prefix="SEASON")
+        one_hot = pd.get_dummies(data['SEASON'], prefix="SEASON").astype(int)
         data = pd.concat([data, one_hot], axis=1)
         data = data.drop(columns=["SEASON"])
+
+    if "TMQ" in data.columns and "WIND850_MAGNITUDE" in data.columns:
+        data['TMQ_WIND850_INTERACTION'] = data['TMQ'] * data['WIND850_MAGNITUDE']
+
+    if "TMQ" in data.columns and "WINDBOT_MAGNITUDE" in data.columns:
+        data['TMQ_WINDBOT_INTERACTION'] = data['TMQ'] * data['WINDBOT_MAGNITUDE']
+
+    if "QREFHT" in data.columns and "TREFHT" in data.columns:
+        data['QREFHT_TREFHT_INTERACTION'] = data['QREFHT'] * data['TREFHT']
+
+    # Polynomial Features: Quadratic terms
+    if "TMQ" in data.columns:
+        data['TMQ_SQUARE'] = data['TMQ'] ** 2
+
+    if "WIND850_MAGNITUDE" in data.columns:
+        data['WIND850_MAGNITUDE_SQUARE'] = data['WIND850_MAGNITUDE'] ** 2
+
+    if "WINDBOT_MAGNITUDE" in data.columns:
+        data['WINDBOT_MAGNITUDE_SQUARE'] = data['WINDBOT_MAGNITUDE'] ** 2
+
+    if "TREFHT" in data.columns:
+        data['TREFHT_SQUARE'] = data['TREFHT'] ** 2
+
+    # Cyclical Encoding for Time-Related Features
+    if "MONTH" in data.columns:
+        data['MONTH_SIN'] = np.sin(2 * np.pi * data['MONTH'] / 12)
+        data['MONTH_COS'] = np.cos(2 * np.pi * data['MONTH'] / 12)
+
+    # Atmospheric Stability: Lapse Rate
+    if "T500" in data.columns and "T200" in data.columns:
+        data['LAPSE_RATE'] = (data['T500'] - data['T200']) / 300  # difference in temperature over the difference in height
 
     if not is_test and "Label" in data.columns:
         # Move Label column to the end only if it's not test data
