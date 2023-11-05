@@ -139,14 +139,17 @@ location_per_latlon = {
 (22.17731421, 243.75)
 ]}
 
-import numpy as np
-
 def format_data(data, is_test=False):
-    # Filter all duplicates and remove SNo column
+
+    # ========================================================
+    # Preprocessing steps and removing unnecessary features
+    # ========================================================
+
+    # Remove SNo column
     if "SNo" in data.columns:
         data = data.drop(columns=["SNo"])
 
-    # Remove ALL rows with same set of features but different label
+    # Remove all rows with a duplicate set of features in training data
     if not is_test and "Label" in data.columns:
         data = data.drop_duplicates()
         duplicate_mask = data.drop(columns="Label").duplicated(keep=False)
@@ -169,8 +172,12 @@ def format_data(data, is_test=False):
 
         # Ensure LOCATION column is of type int
         data['LOCATION'] = data['LOCATION'].astype(int)
-        
-    if "LOCATION" in data.columns:        
+        data = data.drop(columns=["LAT", "LON"])
+    
+    if "lat" in data.columns and "lon" in data.columns:
+        data = data.drop(columns=["lat", "lon"])
+
+    if "LOCATION" in data.columns:
         data["SOUTHERN_HEMISPHERE"] = (data["LOCATION"] <= 2).astype(int)
 
     if "LOCATION" in data.columns:
@@ -181,87 +188,90 @@ def format_data(data, is_test=False):
 
     if "time" in data.columns:
         # Simplify the time column
-        data['YEAR'] = data['time'].apply(lambda x: int(str(x)[:4]))
         data['MONTH'] = data['time'].apply(lambda x: int(str(x)[4:6]))
-        data['DAY'] = data['time'].apply(lambda x: int(str(x)[6:]))
         data = data.drop(columns=["time"])
 
-    if "PRECT" in data.columns:
-        # Scale change for PRECT
-        data["PRECT"] = data["PRECT"] * 3600 * 1000
+    if is_test:
+        # Change scale of PRECT and transform to log scale
+        data["PRECT"] = data["PRECT"].apply(lambda x: 0 if x < 0 else x)
+        data["PRECT"] = np.sqrt(data["PRECT"] * 10_000_000_000)
 
-    if all(col in data.columns for col in ["U850", "V850"]):
-        # Wind magnitude and direction for 850
-        data["WIND850_MAGNITUDE"] = np.sqrt(data["U850"]**2 + data["V850"]**2)
-        data['WIND850_DIRECTION'] = np.arctan2(data['V850'], data['U850'])
-        data['WIND850_INTERACTION'] = data['U850'] * data['V850']
+    # ========================================================
+    # General features that could be useful
+    # ========================================================
 
-    if all(col in data.columns for col in ["UBOT", "VBOT"]):
-        # Wind magnitude and direction for BOT
-        data["WINDBOT_MAGNITUDE"] = np.sqrt(data["UBOT"]**2 + data["VBOT"]**2)
-        data['WINDBOT_DIRECTION'] = np.arctan2(data['VBOT'], data['UBOT'])
-        data['WINDBOT_INTERACTION'] = data['UBOT'] * data['VBOT']
+    # Wind magnitude for 850 and BOT
+    data["WIND850_MAGNITUDE"] = np.sqrt(data["U850"]**2 + data["V850"]**2)
+    data["WINDBOT_MAGNITUDE"] = np.sqrt(data["UBOT"]**2 + data["VBOT"]**2)
 
-    if "PS" in data.columns and "WIND850_MAGNITUDE" in data.columns:
-        data['PS_WIND850_INTERACTION'] = data['PS'] * data['WIND850_MAGNITUDE']
+    # Wind direction for 850 and BOT
+    data['WIND850_DIRECTION'] = np.arctan2(data['V850'], data['U850'])
+    data['WINDBOT_DIRECTION'] = np.arctan2(data['VBOT'], data['UBOT'])
 
-    if "PS" in data.columns and "WINDBOT_MAGNITUDE" in data.columns:
-        data['PS_WINDBOT_INTERACTION'] = data['PS'] * data['WINDBOT_MAGNITUDE']
+    # ========================================================
+    # Interaction features
+    # ========================================================
 
-    if all(col in data.columns for col in ["PS", "PSL"]):
-        data['PRESSURE_DIFFERENCE'] = data['PS'] - data['PSL']
+    # Interaction between wind magnitudes
+    data["WIND_MAGNITUDE_INTERACTION"] = data['WIND850_MAGNITUDE'] * data['WINDBOT_MAGNITUDE'] 
 
-    if all(col in data.columns for col in ["T200", "T500"]):
-        data['TEMP_DIFFERENCE'] = data['T200'] - data['T500']
+    # Interaction between temperature and humidity
+    data['PS_TMQ_INTERACTION'] = data['PS'] * data['TMQ']
 
-    if "WINDBOT_MAGNITUDE" in data.columns and "WIND850_MAGNITUDE" in data.columns:
-        data['WIND_SHEAR'] = data['WINDBOT_MAGNITUDE'] - data['WIND850_MAGNITUDE']
+    # Interaction between precipitation rate and wind magnitude
+    data["PRECT_WIND_MAGNITUDE_INTERACTION"] = data["PRECT"] * data["WIND850_MAGNITUDE"] * data["WINDBOT_DIRECTION"]
 
-    if all(col in data.columns for col in ["Z200", "Z1000"]):
-        data['GEOPOTENTIAL_DIFF'] = data['Z200'] - data['Z1000']
+    # Interaction between wind magnitude and pressure
+    data['PS_WIND850_INTERACTION'] = data['PS'] * data['WIND850_MAGNITUDE']
+    data['PS_WINDBOT_INTERACTION'] = data['PS'] * data['WINDBOT_MAGNITUDE']
 
-    if "MONTH" in data.columns:
-        data['SEASON'] = data['MONTH'].apply(lambda x: 'Winter' if x in [12, 1, 2] else ('Spring' if x in [3, 4, 5] else ('Summer' if x in [6, 7, 8] else 'Fall')))
-        one_hot = pd.get_dummies(data['SEASON'], prefix="SEASON").astype(int)
-        data = pd.concat([data, one_hot], axis=1)
-        data = data.drop(columns=["SEASON"])
+    # Humidity and wind magnitude interaction
+    data['QREFHT_WIND850_INTERACTION'] = data['QREFHT'] * data['WIND850_MAGNITUDE']
+    data['QREFHT_WINDBOT_INTERACTION'] = data['QREFHT'] * data['WINDBOT_MAGNITUDE']
 
-    if "TMQ" in data.columns and "WIND850_MAGNITUDE" in data.columns:
-        data['TMQ_WIND850_INTERACTION'] = data['TMQ'] * data['WIND850_MAGNITUDE']
+    # Humidity and temperature interaction
+    data['HUMIDITY_INDEX'] = data['TMQ'] * data['QREFHT']
 
-    if "TMQ" in data.columns and "WINDBOT_MAGNITUDE" in data.columns:
-        data['TMQ_WINDBOT_INTERACTION'] = data['TMQ'] * data['WINDBOT_MAGNITUDE']
+    # Integrated Vapor Transport
+    data["TMQ_WIND850_INTERACTION"] = data['TMQ'] * data["WIND850_MAGNITUDE"]
+    data['TMQ_WINDBOT_INTERACTION'] = data['TMQ'] * data["WINDBOT_MAGNITUDE"]
+    
+    # Interaction between temperature and humidity
+    data['T200_QREFHT_INTERACTION'] = data['T200'] * data['QREFHT']
+    data['T500_QREFHT_INTERACTION'] = data['T500'] * data['QREFHT']
 
-    if "QREFHT" in data.columns and "TREFHT" in data.columns:
-        data['QREFHT_TREFHT_INTERACTION'] = data['QREFHT'] * data['TREFHT']
+    # Interaction between temperature and wind magnitude
+    data['QREFHT_TREFHT_INTERACTION'] = data['QREFHT'] * data['TREFHT']
 
-    # Polynomial Features: Quadratic terms
-    if "TMQ" in data.columns:
-        data['TMQ_SQUARE'] = data['TMQ'] ** 2
+    # ========================================================
+    # Features intended to identify Tropical Cyclones
+    # ========================================================
+    
+    # Geopotential Height Difference to provide insights into the vertical structure of the atmosphere
+    data['GEOPOTENTIAL_DIFF_200_1000'] = data['Z200'] - data['Z1000']
 
-    if "WIND850_MAGNITUDE" in data.columns:
-        data['WIND850_MAGNITUDE_SQUARE'] = data['WIND850_MAGNITUDE'] ** 2
+    # Pressure difference: Difference between surface and sea-level pressure
+    data['PRESSURE_DIFFERENCE'] = data['PS'] - data['PSL']
 
-    if "WINDBOT_MAGNITUDE" in data.columns:
-        data['WINDBOT_MAGNITUDE_SQUARE'] = data['WINDBOT_MAGNITUDE'] ** 2
+    # Temperature difference: Difference between temperatures at different pressure surfaces
+    data['TEMP_DIFFERENCE'] = data['T200'] - data['T500']
 
-    if "TREFHT" in data.columns:
-        data['TREFHT_SQUARE'] = data['TREFHT'] ** 2
+    # Wind shear: Difference in wind magnitudes between levels
+    data['WIND_SHEAR'] = data['WINDBOT_MAGNITUDE'] - data['WIND850_MAGNITUDE']
 
-    # Cyclical Encoding for Time-Related Features
-    if "MONTH" in data.columns:
-        data['MONTH_SIN'] = np.sin(2 * np.pi * data['MONTH'] / 12)
-        data['MONTH_COS'] = np.cos(2 * np.pi * data['MONTH'] / 12)
+    # ========================================================
+    # Features intended to identify Atmospheric Rivers
+    # ========================================================
 
-    # Atmospheric Stability: Lapse Rate
-    if "T500" in data.columns and "T200" in data.columns:
-        data['LAPSE_RATE'] = (data['T500'] - data['T200']) / 300  # difference in temperature over the difference in height
+    # Ratio of PRECT to TMQ
+    data['PRECT_TMQ_RATIO'] = data['PRECT'] / data['TMQ']
 
+    # Sorting columns
+    ordered_columns = sorted(data.columns)
     if not is_test and "Label" in data.columns:
-        # Move Label column to the end only if it's not test data
-        cols = list(data.columns)
-        cols.remove("Label")
-        cols.append("Label")
-        data = data[cols]
+        ordered_columns.remove("Label")
+        ordered_columns.append("Label")
+
+    data = data[ordered_columns]
 
     return data
